@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FocusFlow | Distraction Tracker & Notes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    (() => {
+      const savedTheme = localStorage.getItem('ff_theme');
+      const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+      if (savedTheme === 'dark' || (!savedTheme && prefersDark)) {
+        document.documentElement.classList.add('theme-dark');
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- App Shell -->
+  <div class="app-container">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">⚡</div>
+        <span class="text-gradient">FocusFlow</span>
+      </div>
+      
+      <nav class="nav-menu">
+        <a class="nav-item active" data-view="dashboard">
+          <span class="nav-icon">📊</span> Dashboard
+        </a>
+        <a class="nav-item" data-view="sessions">
+          <span class="nav-icon">⏳</span> Sessions
+        </a>
+        <a class="nav-item" data-view="notes">
+          <span class="nav-icon">📝</span> Notes
+        </a>
+        <a class="nav-item" data-view="insights">
+          <span class="nav-icon">💡</span> Insights
+        </a>
+      </nav>
+
+      <!-- Quick Settings Form -->
+      <div class="glass-card" style="padding: 16px; margin-top: auto;">
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
+          <span class="theme-toggle-icon" id="theme-toggle-icon">🌙</span>
+          <span id="theme-toggle-label">Dark Mode</span>
+        </button>
+        <h4 style="margin-bottom: 12px; font-size: 13px; color: var(--text-muted)">Timer Settings</h4>
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+          <input type="number" id="settings-work-dur" class="input-field" style="margin: 0; padding: 6px;" title="Work Minutes" placeholder="Work">
+          <input type="number" id="settings-break-dur" class="input-field" style="margin: 0; padding: 6px;" title="Break Minutes" placeholder="Break">
+        </div>
+        <button id="btn-save-settings" class="btn btn-secondary" style="width: 100%; justify-content: center; font-size: 12px;" type="button">Save</button>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      
+      <!-- ─── DASHBOARD VIEW ─── -->
+      <section id="view-dashboard" class="view view-active">
+        <div class="dashboard-hero">
+          <p class="eyebrow">FocusFlow</p>
+          <h1 class="view-title" id="user-greeting">Know your focus state.</h1>
+          <p class="view-subtitle" id="daily-recommendation">Start when ready. Recover when not.</p>
+          <div class="hero-actions">
+            <button id="hero-start-session" class="btn btn-primary" type="button">Start a clean session</button>
+            <a href="#" onclick="App.navigateTo('insights')">See why ↓</a>
+          </div>
+          <span class="streak-pill hidden" id="dash-streak-fire" title="Active Streak!">Streak active</span>
+        </div>
+
+        <div class="readiness-card">
+          <div class="readiness-main">
+            <span class="stat-label">Today’s State</span>
+            <div>
+              <span class="readiness-score" id="dash-recovery-score">—</span>
+              <span class="readiness-label" id="dash-recovery-label">Calibrating</span>
+            </div>
+          </div>
+          <div class="readiness-metrics">
+            <div class="readiness-metric">
+              <span>Focus</span>
+              <strong id="dash-state-focus">—</strong>
+              <small id="dash-state-focus-label">No Signal</small>
+            </div>
+            <div class="readiness-metric">
+              <span>Recovery</span>
+              <strong id="dash-state-recovery">—</strong>
+              <small id="dash-state-recovery-label">Good to Go</small>
+            </div>
+            <div class="readiness-metric">
+              <span>Load</span>
+              <strong id="dash-state-load">—</strong>
+              <small id="dash-state-load-label">Light Day</small>
+            </div>
+            <div class="readiness-metric">
+              <span>Consistency</span>
+              <strong id="dash-state-consistency">—</strong>
+              <small id="dash-state-consistency-label">Start Small</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-grid">
+          <!-- Left Col: Timer Panel -->
+          <div class="timer-panel">
+            
+            <div id="start-panel">
+              <p class="eyebrow">Timer</p>
+              <h3 class="mb-4">Do one honest block.</h3>
+              <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 24px;">Tiny sessions do not count as deep work.</p>
+              <button id="btn-start-session" class="btn btn-primary" type="button">Start Session</button>
+            </div>
+
+            <div id="session-panel" class="hidden" style="width: 100%;">
+              <div class="timer-circle-wrap" id="timer-circle">
+                <svg class="timer-svg" viewBox="0 0 120 120">
+                  <defs>
+                    <linearGradient id="timerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stop-color="#ff5f57" />
+                      <stop offset="55%" stop-color="#f2b84b" />
+                      <stop offset="100%" stop-color="#00a68f" />
+                    </linearGradient>
+                  </defs>
+                  <circle class="timer-ring-bg" cx="60" cy="60" r="54" />
+                  <circle id="timer-ring-progress" class="timer-ring-progress" cx="60" cy="60" r="54" stroke-dasharray="339.292" stroke-dashoffset="0" />
+                </svg>
+                <div class="timer-time" id="timer-display">25:00</div>
+                <div class="timer-label" id="timer-label">Focusing</div>
+              </div>
+
+              <div class="flex-between mb-4">
+                <button id="btn-pause" class="btn btn-secondary" type="button">⏸ Pause</button>
+                <button id="btn-stop" class="btn btn-danger" type="button">⏹ Stop</button>
+              </div>
+
+            <div id="distraction-panel" style="width: 100%;">
+                <div style="font-size: 12px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">Tap what pulled you</div>
+                <div class="distraction-grid">
+                  <button class="distr-btn" data-type="phone" type="button">📱 Phone</button>
+                  <button class="distr-btn" data-type="social" type="button">🌐 Social</button>
+                  <button class="distr-btn" data-type="noise" type="button">🔊 Noise</button>
+                  <button class="distr-btn" data-type="thoughts" type="button">💭 Thoughts</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="break-panel" class="hidden">
+              <h3 class="mb-4 text-gradient">Break Time</h3>
+              <div id="break-display" class="timer-time" style="font-size: 36px; margin: 24px 0;">05:00</div>
+              <button id="btn-skip-break" class="btn btn-secondary" type="button">Skip Break</button>
+            </div>
+
+            <div id="done-panel" class="hidden">
+              <h3 class="mb-4">Session Complete!</h3>
+              <p style="color: var(--text-muted); margin-bottom: 24px;">Great job staying focused.</p>
+              <button id="btn-reset" class="btn btn-primary" type="button">New Session</button>
+            </div>
+            
+          </div>
+
+          <!-- Right Col: Stats & Quick Actions -->
+          <div>
+            <div class="dash-stats-grid quiet-grid">
+              <div class="stat-card">
+                <span class="stat-label">Day Streak</span>
+                <span class="stat-value" id="dash-streak">0</span>
+                <span class="stat-sub" id="dash-best-streak">Best: 0</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Today's Focus</span>
+                <span class="stat-value" id="dash-focus-score">—</span>
+                <span class="stat-sub" id="dash-focus-label">No sessions yet</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Total Sessions</span>
+                <span class="stat-value" id="dash-total-sessions">0</span>
+                <span class="stat-sub" id="dash-today-sessions">0 today</span>
+              </div>
+            </div>
+
+            <div class="quiet-section mb-4">
+              <h4 style="margin-bottom: 16px;">This week</h4>
+              <div id="dash-mini-bar" style="display: flex; justify-content: center;"></div>
+            </div>
+
+            <div class="quiet-section">
+              <div class="flex-between" style="margin-bottom: 16px;">
+                <h4>Recent sessions</h4>
+                <a href="#" onclick="App.navigateTo('sessions')" style="color: var(--accent-primary); font-size: 13px; text-decoration: none;">View all</a>
+              </div>
+              <div id="recent-sessions" style="display: flex; flex-direction: column; gap: 12px;"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── SESSIONS VIEW ─── -->
+      <section id="view-sessions" class="view hidden">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Session History</h1>
+            <p class="view-subtitle">Review your past focus blocks and distractions.</p>
+          </div>
+        </div>
+        <div id="sessions-list" style="max-width: 700px;"></div>
+      </section>
+
+      <!-- ─── NOTES VIEW ─── -->
+      <section id="view-notes" class="view hidden" style="height: 100%;">
+        <div class="view-header" style="flex-shrink: 0;">
+          <div>
+            <h1 class="view-title">Smart Notes</h1>
+            <p class="view-subtitle">Jot down thoughts without losing focus.</p>
+          </div>
+          <button id="btn-new-note" class="btn btn-primary" type="button">+ New Note</button>
+        </div>
+
+        <div class="notes-layout">
+          <div class="notes-sidebar">
+            <input type="text" id="notes-search" class="input-field" placeholder="Search notes..." style="margin-bottom: 0;">
+            <div class="notes-list" id="notes-list"></div>
+          </div>
+          
+          <div class="editor-panel hidden" id="note-editor-panel">
+            <div class="editor-header">
+              <div style="flex: 1;">
+                <input type="text" id="note-title" class="title-input" placeholder="Note Title">
+                <input type="text" id="note-tags-input" class="tags-input mt-4" placeholder="tags (comma separated)">
+              </div>
+              <button id="btn-delete-note" class="btn btn-danger" style="padding: 6px 12px;" type="button">Delete</button>
+            </div>
+            <div class="editor-toolbar">
+              <button class="tool-btn" id="btn-note-bold" title="Bold" type="button"><b>B</b></button>
+              <button class="tool-btn" id="btn-note-italic" title="Italic" type="button"><i>I</i></button>
+              <button class="tool-btn" id="btn-note-underline" title="Underline" type="button"><u>U</u></button>
+              <button class="tool-btn" id="btn-note-strike" title="Strikethrough" type="button"><s>S</s></button>
+              <div style="width: 1px; background: var(--border-light); margin: 0 4px;"></div>
+              <button class="tool-btn" id="btn-note-h3" title="Heading" type="button">H</button>
+              <button class="tool-btn" id="btn-note-ul" title="Bullet List" type="button">•</button>
+              <button class="tool-btn" id="btn-note-ol" title="Numbered List" type="button">1.</button>
+              <button class="tool-btn" id="btn-note-hr" title="Divider" type="button">—</button>
+            </div>
+            <div id="note-editor" class="editor-content" contenteditable="true" placeholder="Start typing..."></div>
+          </div>
+
+          <div class="empty-state" id="note-empty-state">
+            <div class="empty-icon">📝</div>
+            <h3>Select a note or create a new one</h3>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── INSIGHTS VIEW ─── -->
+      <section id="view-insights" class="view hidden">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">Insights</h1>
+            <p class="view-subtitle">AI-style analysis of your focus patterns.</p>
+          </div>
+        </div>
+
+        <div class="insights-grid" id="insights-cards">
+          <!-- Cards injected via JS -->
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 300px; gap: 24px; margin-top: 16px;">
+          <div class="glass-card">
+            <h4 style="margin-bottom: 8px;">Distraction Breakdown</h4>
+            <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 24px;">What pulls you away the most?</p>
+            <div id="distraction-chart"></div>
+          </div>
+
+          <div class="glass-card">
+            <h4 style="margin-bottom: 16px;">Weekly Comparison</h4>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-light); padding-bottom: 12px; margin-bottom: 12px;">
+              <span style="color: var(--text-muted)">This Week</span>
+              <span><strong id="ins-this-week-sessions">0</strong> sessions (avg <strong id="ins-this-week-score">0</strong>)</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-light); padding-bottom: 12px; margin-bottom: 12px;">
+              <span style="color: var(--text-muted)">Last Week</span>
+              <span><strong id="ins-last-week-sessions">0</strong> sessions (avg <strong id="ins-last-week-score">0</strong>)</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span>Score Shift</span>
+              <span id="ins-improvement" style="font-weight: 700; padding: 4px 8px; border-radius: 4px; background: rgba(255,255,255,0.1);">0 pts</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="glass-card">
+          <h4>Consistency Heatmap</h4>
+          <div class="heatmap-container" id="insights-heatmap"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ─── MODALS & TOASTS ─── -->
+  <div id="toast-container"></div>
+
+  <!-- Mood Modal -->
+  <div id="mood-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <h3 style="margin-bottom: 8px;">Session Complete!</h3>
+      <p style="color: var(--text-muted);">How did that session feel?</p>
+      <div class="mood-grid">
+        <button class="mood-btn" data-mood="great" type="button">🤩</button>
+        <button class="mood-btn" data-mood="good" type="button">🙂</button>
+        <button class="mood-btn" data-mood="meh" type="button">😐</button>
+        <button class="mood-btn" data-mood="bad" type="button">😫</button>
+      </div>
+      <button id="btn-skip-mood" class="btn btn-secondary" type="button">Skip</button>
+    </div>
+  </div>
+
+  <!-- Stress Check Modal -->
+  <div id="stress-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <h3 style="margin-bottom: 8px;">Quick check-in</h3>
+      <p style="color: var(--text-muted);">How stressed do you feel before starting?</p>
+      <div class="stress-grid">
+        <button class="stress-btn" data-stress="1" type="button"><strong>1</strong><span>Calm</span></button>
+        <button class="stress-btn" data-stress="2" type="button"><strong>2</strong><span>Easy</span></button>
+        <button class="stress-btn" data-stress="3" type="button"><strong>3</strong><span>Normal</span></button>
+        <button class="stress-btn" data-stress="4" type="button"><strong>4</strong><span>Tense</span></button>
+        <button class="stress-btn" data-stress="5" type="button"><strong>5</strong><span>Heavy</span></button>
+      </div>
+      <button id="btn-skip-stress" class="btn btn-secondary" type="button">Skip Check-in</button>
+    </div>
+  </div>
+
+  <!-- Onboarding Modal -->
+  <div id="onboarding-modal" class="modal-overlay hidden">
+    <div class="modal-content" style="text-align: left;">
+      <div style="font-size: 48px; margin-bottom: 16px; text-align: center;">⚡</div>
+      <h2 style="margin-bottom: 16px; text-align: center;">Welcome to FocusFlow</h2>
+      <p style="color: var(--text-muted); margin-bottom: 24px; text-align: center;">Track distractions, take smart notes, and build focus streaks.</p>
+      
+      <label style="font-size: 14px; font-weight: 500; display: block; margin-bottom: 8px;">What should we call you?</label>
+      <input type="text" id="onboarding-name" class="input-field" placeholder="Your name">
+      
+      <button id="btn-onboarding-start" class="btn btn-primary" style="width: 100%; justify-content: center; margin-top: 16px;" type="button">Let's Go!</button>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="js/storage.js"></script>
+  <script src="js/streaks.js"></script>
+  <script src="js/timer.js"></script>
+  <script src="js/insights.js"></script>
+  <script src="js/notes.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
