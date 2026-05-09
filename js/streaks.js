@@ -4,6 +4,7 @@ const Streaks = (() => {
 
   function getHeatmapData(weeksBack = 26) {
     const { dailyScores } = Storage.getStreakData();
+    const usageByDate = _getUsageByDate();
     const cells = [];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -14,11 +15,14 @@ const Streaks = (() => {
 
     const cursor = new Date(start);
     while (cursor <= today) {
-      const ds = cursor.toISOString().slice(0, 10);
+      const ds = Storage.dateStr(cursor.getTime());
       const score = dailyScores[ds] || null;
+      const usage = usageByDate[ds] || { sessions: 0, minutes: 0 };
       cells.push({
         date: ds,
         score,
+        sessions: usage.sessions,
+        minutes: usage.minutes,
         level: score === null ? 0 : score < 30 ? 1 : score < 55 ? 2 : score < 75 ? 3 : 4,
         isFuture: cursor > today,
         isToday: ds === Storage.todayStr(),
@@ -86,7 +90,10 @@ const Streaks = (() => {
         const y = LABEL_H + di * (CELL + GAP);
         const color = cell.isFuture ? 'transparent' : levelColors[cell.level];
         const border = cell.isToday ? 'stroke="#ff5f57" stroke-width="2"' : '';
-        const title = cell.score !== null ? `${cell.date}: Focus Score ${cell.score}` : cell.date;
+        const usageText = `${cell.sessions} session${cell.sessions !== 1 ? 's' : ''}, ${cell.minutes} min`;
+        const title = cell.score !== null
+          ? `${cell.date}: Score ${cell.score}, ${usageText}`
+          : `${cell.date}: ${usageText}`;
         svg += `<rect x="${x}" y="${y}" width="${CELL}" height="${CELL}" rx="3" fill="${color}" ${border} opacity="${cell.isFuture ? 0 : 1}">
           <title>${title}</title>
         </rect>`;
@@ -94,7 +101,9 @@ const Streaks = (() => {
     });
 
     svg += '</svg>';
-    container.innerHTML = svg;
+    container.innerHTML = `
+      <div class="heatmap-scroll">${svg}</div>
+    `;
   }
 
   function getWeeklyStats() {
@@ -121,20 +130,26 @@ const Streaks = (() => {
     if (!container) return;
 
     const { dailyScores } = Storage.getStreakData();
+    const usageByDate = _getUsageByDate();
     const isDark = document.documentElement.classList.contains('theme-dark');
     const labelColor = isDark ? '#b7ada2' : '#64748b';
     const days = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      const ds = d.toISOString().slice(0, 10);
+      const ds = Storage.dateStr(d.getTime());
+      const usage = usageByDate[ds] || { sessions: 0, minutes: 0 };
       days.push({
         label: d.toLocaleDateString('default', { weekday: 'short' }),
         score: dailyScores[ds] || 0,
         date: ds,
+        sessions: usage.sessions,
+        minutes: usage.minutes,
       });
     }
 
+    const totalSessions = days.reduce((sum, day) => sum + day.sessions, 0);
+    const totalMinutes = days.reduce((sum, day) => sum + day.minutes, 0);
     const maxScore = 100;
     const BAR_W = 28;
     const GAP = 6;
@@ -152,8 +167,12 @@ const Streaks = (() => {
       const fill = isToday
         ? 'url(#barGrad)'
         : day.score >= 70 ? '#00a68f99' : day.score >= 40 ? '#f2b84b99' : isDark ? '#fffaf21f' : '#211f1c22';
+      const title = `${day.date}: ${day.sessions} session${day.sessions !== 1 ? 's' : ''}, ${day.minutes} min, score ${day.score || 'none'}`;
       svg += `
-        <rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}" rx="5" fill="${fill}"/>
+        <rect x="${x}" y="${y}" width="${BAR_W}" height="${barH}" rx="5" fill="${fill}">
+          <title>${title}</title>
+        </rect>
+        <text x="${x + BAR_W / 2}" y="${Math.max(10, y - 6)}" text-anchor="middle" fill="${labelColor}" font-size="10" font-weight="700" font-family="Inter,sans-serif">${day.minutes || ''}</text>
         <text x="${x + BAR_W / 2}" y="${H}" text-anchor="middle" fill="${labelColor}" font-size="11" font-family="Inter,sans-serif">${day.label}</text>
       `;
     });
@@ -163,7 +182,31 @@ const Streaks = (() => {
         <stop offset="100%" stop-color="#00a68f"/>
       </linearGradient>
     </defs></svg>`;
-    container.innerHTML = svg;
+    container.innerHTML = `
+      <div class="mini-bar-wrap">${svg}</div>
+      <div class="mini-bar-usage">
+        <strong>${totalMinutes} min</strong>
+        <span>${totalSessions} session${totalSessions !== 1 ? 's' : ''} in the last 7 days</span>
+      </div>
+    `;
+  }
+
+  function _getUsageByDate() {
+    const usage = {};
+    Storage.Sessions.getAll().filter(s => s.completed).forEach(session => {
+      const date = session.date || Storage.dateStr(session.startTime);
+      if (!usage[date]) usage[date] = { sessions: 0, minutes: 0 };
+      usage[date].sessions += 1;
+      usage[date].minutes += _sessionMinutes(session);
+    });
+    Object.values(usage).forEach(day => {
+      day.minutes = Math.round(day.minutes);
+    });
+    return usage;
+  }
+
+  function _sessionMinutes(session) {
+    return Number(session.actualDuration ?? session.plannedDuration ?? 0) || 0;
   }
 
   return { getHeatmapData, renderHeatmap, getWeeklyStats, renderMiniBar };
