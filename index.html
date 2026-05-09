@@ -43,7 +43,16 @@
         <a class="nav-item" data-view="insights">
           <span class="nav-icon">💡</span> Insights
         </a>
+        <a class="nav-item" data-view="users">
+          <span class="nav-icon">👥</span> Users
+        </a>
       </nav>
+
+      <!-- Active User Chip -->
+      <div class="sidebar-user-chip" onclick="App.navigateTo('users')" title="Switch users">
+        <span class="sidebar-user-dot"></span>
+        <span class="sidebar-user-name" id="sidebar-active-user">Loading…</span>
+      </div>
 
       <!-- Quick Settings Form -->
       <div class="glass-card" style="padding: 16px; margin-top: auto;">
@@ -188,7 +197,7 @@
 
             <div class="quiet-section mb-4">
               <h4 style="margin-bottom: 16px;">This week</h4>
-              <div id="dash-mini-bar" style="display: flex; justify-content: center;"></div>
+              <div id="dash-mini-bar"></div>
             </div>
 
             <div class="quiet-section">
@@ -267,6 +276,10 @@
           </div>
         </div>
 
+        <div id="weekly-report-card" class="weekly-report-card">
+          <!-- Weekly report injected via JS -->
+        </div>
+
         <div class="insights-grid" id="insights-cards">
           <!-- Cards injected via JS -->
         </div>
@@ -299,6 +312,63 @@
           <h4>Consistency Heatmap</h4>
           <div class="heatmap-container" id="insights-heatmap"></div>
         </div>
+      </section>
+
+      <!-- ─── USERS VIEW ─── -->
+      <section id="view-users" class="view hidden">
+        <div class="view-header">
+          <div>
+            <h1 class="view-title">User Profiles</h1>
+            <p class="view-subtitle">Switch between users — each has their own sessions, notes, and settings.</p>
+          </div>
+        </div>
+
+        <!-- Add new user -->
+        <div class="glass-card users-add-card">
+          <h4>Add a New User</h4>
+          <div class="users-add-row">
+            <input type="text" id="new-user-name" class="input-field" placeholder="Enter name…" style="margin:0;flex:1;" maxlength="32">
+            <button id="btn-add-user" class="btn btn-primary" type="button">+ Add</button>
+          </div>
+        </div>
+
+        <div class="journey-grid">
+          <div class="journey-panel">
+            <p class="eyebrow">Journey</p>
+            <h3 id="journey-owner">Current user</h3>
+            <p id="journey-rollover-copy">A new daily state starts automatically at local midnight.</p>
+            <div class="journey-stats">
+              <div>
+                <span id="journey-total-sessions">0</span>
+                <small>Total sessions</small>
+              </div>
+              <div>
+                <span id="journey-today-sessions">0</span>
+                <small>Today</small>
+              </div>
+              <div>
+                <span id="journey-avg-score">—</span>
+                <small>Avg score</small>
+              </div>
+            </div>
+          </div>
+
+          <div class="journey-panel journey-danger-panel">
+            <p class="eyebrow">Records</p>
+            <h3>Clean up data</h3>
+            <p>Use these when a demo, test run, or accidental record should not shape the current journey.</p>
+            <div class="journey-actions">
+              <button id="btn-export-json" class="btn btn-secondary" type="button">Export JSON</button>
+              <button id="btn-import-json" class="btn btn-secondary" type="button">Import JSON</button>
+              <button id="btn-delete-previous-records" class="btn btn-secondary" type="button">Delete previous records</button>
+              <button id="btn-restart-journey" class="btn btn-danger" type="button">Restart journey</button>
+              <input id="json-import-file" type="file" accept="application/json,.json" class="hidden">
+            </div>
+          </div>
+        </div>
+
+        <!-- User list -->
+        <div id="users-list" class="users-list"></div>
       </section>
 
     </main>
@@ -349,6 +419,7 @@
       <input type="text" id="onboarding-name" class="input-field" placeholder="Your name">
       
       <button id="btn-onboarding-start" class="btn btn-primary" style="width: 100%; justify-content: center; margin-top: 16px;" type="button">Let's Go!</button>
+      <button id="btn-onboarding-skip" class="btn btn-secondary" style="width: 100%; justify-content: center; margin-top: 10px;" type="button">Skip for now</button>
     </div>
   </div>
 
@@ -358,6 +429,7 @@
   <script src="js/timer.js"></script>
   <script src="js/insights.js"></script>
   <script src="js/notes.js"></script>
+  <script src="js/users.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
