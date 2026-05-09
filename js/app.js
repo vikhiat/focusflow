@@ -2,13 +2,15 @@
 // SPA router + view rendering + event wiring
 
 const App = (() => {
-  const VIEWS = ['dashboard', 'sessions', 'notes', 'insights'];
+  const VIEWS = ['dashboard', 'sessions', 'notes', 'insights', 'users'];
   let currentView = 'dashboard';
   let moodPending = false;
   let startPending = false;
 
   // ── Init ──────────────────────────────────────────────────────────────────
   function init() {
+    UsersModule.bootstrap();
+    _handleDailyRollover(false);
     _initTheme();
     _resetTransientUi();
     Storage.Sessions.recalculateScores();
@@ -18,13 +20,27 @@ const App = (() => {
     _bindSettings();
     _bindTheme();
     _bindSearch();
+    _bindUsers();
+    _updateSidebarUser();
     navigateTo('dashboard');
     _checkOnboarding();
+    setInterval(() => _handleDailyRollover(true), 60000);
+
+    // When active user changes, refresh the whole UI
+    window.addEventListener('ff:userchange', () => {
+      Storage.Sessions.recalculateScores();
+      _handleDailyRollover(false);
+      _bindSettings(); // re-read settings for new user
+      _updateSidebarUser();
+      navigateTo(currentView === 'users' ? 'users' : 'dashboard');
+      _checkOnboarding();
+    });
   }
 
   // ── Navigation ────────────────────────────────────────────────────────────
   function navigateTo(view) {
     if (!VIEWS.includes(view)) return;
+    _handleDailyRollover(false);
     currentView = view;
 
     document.querySelectorAll('.nav-item').forEach(el => {
@@ -42,6 +58,44 @@ const App = (() => {
     if (view === 'sessions') _renderSessions();
     if (view === 'notes') _renderNotes();
     if (view === 'insights') _renderInsights();
+    if (view === 'users') _renderUsers();
+  }
+
+  function deleteSession(id) {
+    const session = Storage.Sessions.getById(id);
+    if (!session) return;
+    const label = new Date(session.startTime).toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    if (!confirm(`Delete the ${label} session? This will update your stats and streak.`)) return;
+    Storage.Sessions.delete(id);
+    Storage.Sessions.recalculateScores();
+    _renderSessions();
+    _renderDashboard();
+    if (currentView === 'insights') _renderInsights();
+    _showToast('Session deleted. Stats updated.', 'info');
+  }
+
+  function toggleScoreDetails(id) {
+    const details = document.getElementById(`score-details-${id}`);
+    const button = document.querySelector(`[data-score-toggle="${id}"]`);
+    if (!details) return;
+    const isHidden = details.classList.toggle('hidden');
+    if (button) button.textContent = isHidden ? 'Why this score?' : 'Hide score';
+  }
+
+  function _handleDailyRollover(showToast) {
+    const rollover = Storage.checkDailyRollover();
+    if (!rollover.changed) return;
+    Storage.Sessions.recalculateScores();
+    if (showToast) _showToast(`New day started. ${rollover.previous} is saved in history.`, 'info');
+    if (currentView === 'dashboard') _renderDashboard();
+    if (currentView === 'sessions') _renderSessions();
+    if (currentView === 'insights') _renderInsights();
+    if (currentView === 'users') _renderUsers();
   }
 
   // ── Dashboard ─────────────────────────────────────────────────────────────
@@ -160,6 +214,7 @@ const App = (() => {
         const recovery = s.recoveryScore ?? Storage.calcSessionRecoveryScore(s, score);
         const actualDuration = s.actualDuration ?? s.plannedDuration;
         const load = s.loadScore ?? Storage.calcSessionLoadScore(s.distractions, actualDuration, s.plannedDuration);
+        const scoreDetails = _scoreBreakdownHtml(s, actualDuration);
 
         // Distraction breakdown
         const distrTypes = {};
@@ -175,9 +230,13 @@ const App = (() => {
                 <span class="session-time-range">${startT} ${endT ? '→ ' + endT : ''}</span>
                 <span class="session-duration">${_formatDuration(actualDuration)} min</span>
               </div>
-              <div class="session-score-circle" style="--score-color:${scoreColor}">
-                <span class="score-num">${score}</span>
-                <span class="score-lbl">score</span>
+              <div class="session-card-actions">
+                <div class="session-score-circle" style="--score-color:${scoreColor}">
+                  <span class="score-num">${score}</span>
+                  <span class="score-lbl">score</span>
+                </div>
+                <button class="session-explain-btn" type="button" data-score-toggle="${s.id}" onclick="App.toggleScoreDetails('${s.id}')">Why this score?</button>
+                <button class="session-delete-btn" type="button" onclick="App.deleteSession('${s.id}')">Delete</button>
               </div>
             </div>
             <div class="session-card-body">
@@ -188,6 +247,9 @@ const App = (() => {
               ${s.mood ? `<div class="session-stat"><span class="stat-icon">😊</span> Felt ${s.mood}</div>` : ''}
             </div>
             ${distrHTML ? `<div class="distraction-chips">${distrHTML}</div>` : ''}
+            <div id="score-details-${s.id}" class="score-details hidden">
+              ${scoreDetails}
+            </div>
           </div>
         `;
       }).join('');
@@ -202,6 +264,51 @@ const App = (() => {
         </div>
       `;
     }).join('');
+  }
+
+  function _scoreBreakdownHtml(session, actualDuration) {
+    const breakdown = Storage.calcFocusScoreBreakdown(
+      session.distractions || [],
+      actualDuration,
+      session.plannedDuration
+    );
+
+    return `
+      <div class="score-details-head">
+        <div>
+          <span class="stat-label">Score logic</span>
+          <strong>${breakdown.score}/100</strong>
+        </div>
+        <p>${_scoreReason(session, actualDuration)}</p>
+      </div>
+      <div class="score-parts">
+        ${breakdown.parts.map(part => {
+          const pct = part.max > 0 ? Math.max(0, Math.min(100, (Math.max(part.value, 0) / part.max) * 100)) : 0;
+          const value = part.value > 0 ? `+${part.value}` : String(part.value);
+          return `
+            <div class="score-part">
+              <div class="score-part-row">
+                <span>${part.label}</span>
+                <strong>${value}</strong>
+              </div>
+              <div class="score-part-track"><span style="width:${pct}%"></span></div>
+              <small>${part.note}</small>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  function _scoreReason(session, actualDuration) {
+    const distractions = session.distractions?.length || 0;
+    const planned = Number(session.plannedDuration || 25);
+    const completion = actualDuration / Math.max(planned, 1);
+    if (actualDuration < 5) return 'This stayed low because the session was too short to count as deep work.';
+    if (completion >= 0.98 && distractions === 0) return 'Strong score because you completed the planned block with no logged distractions.';
+    if (distractions >= 3) return 'Distractions pulled the score down, even with useful time completed.';
+    if (completion < 0.6) return 'The session helped, but ending well before the planned time reduced the score.';
+    return 'Balanced score from completed time, distraction count, and whether the full block was finished.';
   }
 
   // ── Notes View ────────────────────────────────────────────────────────────
@@ -232,6 +339,8 @@ const App = (() => {
       </div>
     `).join('');
 
+    _renderWeeklyReport();
+
     // Render heatmap
     Streaks.renderHeatmap('insights-heatmap');
 
@@ -249,6 +358,62 @@ const App = (() => {
       impEl.textContent = (improvement >= 0 ? '+' : '') + improvement + ' pts';
       impEl.className = 'ins-improvement ' + (improvement >= 0 ? 'positive' : 'negative');
     }
+  }
+
+  function _renderWeeklyReport() {
+    const container = document.getElementById('weekly-report-card');
+    if (!container) return;
+    const report = Insights.getWeeklyReport();
+    const shift = report.stats.scoreShift;
+    const shiftText = shift === null ? 'No prior week' : `${shift >= 0 ? '+' : ''}${shift} pts`;
+    const shiftClass = shift === null ? 'neutral' : shift >= 0 ? 'positive' : 'negative';
+    const bestSession = report.bestSession
+      ? `${report.bestSession.score} score, ${_formatDuration(report.bestSession.duration)} min`
+      : 'No session yet';
+    const topDistraction = report.topDistraction
+      ? `${report.topDistraction.label} (${report.topDistraction.count})`
+      : 'None logged';
+
+    container.innerHTML = `
+      <div class="weekly-report-main">
+        <div>
+          <p class="eyebrow">Last 7 days</p>
+          <h3>${report.title}</h3>
+          <p>${report.summary}</p>
+        </div>
+        <div class="weekly-grade ${_weeklyGradeClass(report.stats.avgScore)}">
+          <span>${report.stats.avgScore === null ? '—' : report.stats.avgScore}</span>
+          <small>Focus avg</small>
+        </div>
+      </div>
+      <div class="weekly-report-stats">
+        <div><span>${report.stats.sessions}</span><small>Sessions</small></div>
+        <div><span>${report.stats.minutes}</span><small>Minutes</small></div>
+        <div><span>${report.stats.avgRecovery === null ? '—' : report.stats.avgRecovery}</span><small>Recovery</small></div>
+        <div><span class="${shiftClass}">${shiftText}</span><small>Shift</small></div>
+      </div>
+      <div class="weekly-report-footer">
+        <div>
+          <span>Best session</span>
+          <strong>${bestSession}</strong>
+        </div>
+        <div>
+          <span>Top distraction</span>
+          <strong>${topDistraction}</strong>
+        </div>
+        <div>
+          <span>Next move</span>
+          <strong>${report.recommendation}</strong>
+        </div>
+      </div>
+    `;
+  }
+
+  function _weeklyGradeClass(score) {
+    if (score === null) return 'grade-neutral';
+    if (score >= 75) return 'grade-good';
+    if (score >= 55) return 'grade-warn';
+    return 'grade-bad';
   }
 
   function _renderDistractionChart() {
@@ -370,11 +535,15 @@ const App = (() => {
         _startSession(parseInt(btn.dataset.stress, 10));
       };
     });
-    document.getElementById('btn-skip-stress')?.addEventListener('click', event => {
-      event.preventDefault();
-      modal.classList.add('hidden');
-      _startSession();
-    }, { once: true });
+    // Use onclick (not addEventListener) to prevent listener stacking on repeated calls
+    const skipBtn = document.getElementById('btn-skip-stress');
+    if (skipBtn) {
+      skipBtn.onclick = event => {
+        event.preventDefault();
+        modal.classList.add('hidden');
+        _startSession();
+      };
+    }
   }
 
   function _updateTimerDisplay(display) {
@@ -479,16 +648,23 @@ const App = (() => {
     if (goalInput) goalInput.value = settings.dailyGoal;
     if (nameInput) nameInput.value = settings.name;
 
-    document.getElementById('btn-save-settings')?.addEventListener('click', () => {
-      Storage.Settings.save({
-        workDuration: parseInt(workInput?.value) || 25,
-        breakDuration: parseInt(breakInput?.value) || 5,
-        dailyGoal: parseInt(goalInput?.value) || 4,
-        name: nameInput?.value || '',
+    // Re-attach save handler (in case called again after user switch)
+    const saveBtn = document.getElementById('btn-save-settings');
+    if (saveBtn) {
+      const newBtn = saveBtn.cloneNode(true);
+      saveBtn.replaceWith(newBtn);
+      newBtn.addEventListener('click', () => {
+        Storage.Settings.save({
+          workDuration: parseInt(workInput?.value) || 25,
+          breakDuration: parseInt(breakInput?.value) || 5,
+          dailyGoal: parseInt(goalInput?.value) || 4,
+          name: nameInput?.value || '',
+        });
+        _updateSidebarUser();
+        _showToast('✅ Settings saved!', 'success');
+        _renderDashboard();
       });
-      _showToast('✅ Settings saved!', 'success');
-      _renderDashboard();
-    });
+    }
   }
 
   // ── Theme ─────────────────────────────────────────────────────────────────
@@ -530,6 +706,79 @@ const App = (() => {
     });
   }
 
+  // ── Users ──────────────────────────────────────────────────────────────────
+  function _renderUsers() {
+    UsersModule.render();
+  }
+
+  function _bindUsers() {
+    document.getElementById('btn-add-user')?.addEventListener('click', () => {
+      const input = document.getElementById('new-user-name');
+      const name = input?.value?.trim();
+      if (!name) { _showToast('Please enter a name.', 'info'); return; }
+      UsersModule.addUser(name);
+      if (input) input.value = '';
+      _showToast(`✅ User "${name}" added!`, 'success');
+    });
+
+    document.getElementById('new-user-name')?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('btn-add-user')?.click();
+    });
+
+    document.getElementById('btn-delete-previous-records')?.addEventListener('click', () => {
+      if (UsersModule.deletePreviousRecords()) {
+        _renderDashboard();
+        if (currentView === 'insights') _renderInsights();
+        _showToast('Previous records deleted. Today stayed intact.', 'info');
+      }
+    });
+
+    document.getElementById('btn-restart-journey')?.addEventListener('click', () => {
+      if (UsersModule.restartJourney()) {
+        _renderDashboard();
+        if (currentView === 'insights') _renderInsights();
+        _showToast('Journey restarted. Fresh slate ready.', 'success');
+      }
+    });
+
+    document.getElementById('btn-export-json')?.addEventListener('click', () => {
+      UsersModule.exportJson();
+      _showToast('JSON backup exported.', 'success');
+    });
+
+    document.getElementById('btn-import-json')?.addEventListener('click', () => {
+      document.getElementById('json-import-file')?.click();
+    });
+
+    document.getElementById('json-import-file')?.addEventListener('change', async event => {
+      const file = event.target.files?.[0];
+      try {
+        const imported = await UsersModule.importJson(file);
+        event.target.value = '';
+        if (!imported) return;
+        Storage.Sessions.recalculateScores();
+        _bindSettings();
+        _updateSidebarUser();
+        navigateTo('users');
+        _showToast('JSON backup imported.', 'success');
+      } catch (error) {
+        event.target.value = '';
+        _showToast(error.message || 'Import failed.', 'info');
+      }
+    });
+  }
+
+  function _updateSidebarUser() {
+    const user = Storage.Users.getActive();
+    const greeting = document.getElementById('user-greeting');
+    if (greeting && user) {
+      greeting.textContent = `Hey, ${user.name}! 👋`;
+    }
+    // Update sidebar user indicator if present
+    const nameEl = document.getElementById('sidebar-active-user');
+    if (nameEl && user) nameEl.textContent = user.name;
+  }
+
   function _resetTransientUi() {
     startPending = false;
     document.getElementById('stress-modal')?.classList.add('hidden');
@@ -549,28 +798,48 @@ const App = (() => {
         _showToast('Mood logged 👍', 'info');
       };
     });
-    document.getElementById('btn-skip-mood')?.addEventListener('click', () => {
-      modal.classList.add('hidden');
-    }, { once: true });
+    // Use onclick to prevent stacking
+    const skipMood = document.getElementById('btn-skip-mood');
+    if (skipMood) skipMood.onclick = () => modal.classList.add('hidden');
   }
 
   // ── Onboarding ────────────────────────────────────────────────────────────
   function _checkOnboarding() {
     const settings = Storage.Settings.get();
     const hasName = settings.name && settings.name.trim().length > 0;
+    const modal = document.getElementById('onboarding-modal');
     if (!hasName) {
-      const modal = document.getElementById('onboarding-modal');
-      if (modal) modal.classList.remove('hidden');
-
-      document.getElementById('btn-onboarding-start')?.addEventListener('click', () => {
+      if (modal) {
+        modal.classList.remove('hidden');
+        // Clear any previous name input
         const nameEl = document.getElementById('onboarding-name');
-        const name = nameEl?.value.trim() || 'Friend';
-        Storage.Settings.save({ name });
-        modal.classList.add('hidden');
-        _setText('user-greeting', `Hey, ${name}! 👋`);
-        _setText('settings-name', name);
-      }, { once: true });
+        if (nameEl) nameEl.value = '';
+      }
+      // Use onclick to avoid stacking listeners when called multiple times (user switch)
+      const startBtn = document.getElementById('btn-onboarding-start');
+      if (startBtn) {
+        startBtn.onclick = () => {
+          const nameEl = document.getElementById('onboarding-name');
+          const name = nameEl?.value.trim() || 'Friend';
+          Storage.Settings.save({ name });
+          if (modal) modal.classList.add('hidden');
+          _setText('user-greeting', `Hey, ${name}! 👋`);
+          _updateSidebarUser();
+          _bindSettings(); // refresh settings panel with new name
+        };
+      }
+      const skipBtn = document.getElementById('btn-onboarding-skip');
+      if (skipBtn) {
+        skipBtn.onclick = () => {
+          Storage.Settings.save({ name: 'Friend' });
+          if (modal) modal.classList.add('hidden');
+          _setText('user-greeting', 'Hey, Friend! 👋');
+          _updateSidebarUser();
+          _bindSettings();
+        };
+      }
     } else {
+      if (modal) modal.classList.add('hidden'); // ensure closed for existing users
       _setText('user-greeting', `Hey, ${settings.name}! 👋`);
     }
   }
@@ -593,8 +862,8 @@ const App = (() => {
     const today = Storage.todayStr();
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    const yd = yesterday.toISOString().slice(0, 10);
-    if (dateStr === today) return '📅 Today';
+    const yd = Storage.dateStr(yesterday.getTime());
+    if (dateStr === today) return 'Today';
     if (dateStr === yd) return 'Yesterday';
     return new Date(dateStr).toLocaleDateString('default', { weekday: 'long', month: 'short', day: 'numeric' });
   }
@@ -624,7 +893,7 @@ const App = (() => {
     }, 3000);
   }
 
-  return { init, navigateTo };
+  return { init, navigateTo, deleteSession, toggleScoreDetails };
 })();
 
 window.App = App;
