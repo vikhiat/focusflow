@@ -239,7 +239,89 @@ const Insights = (() => {
     return _distractionTypeBreakdown(sessions);
   }
 
-  return { generate, getDistractionBreakdown, DISTRACTION_LABELS };
+  function getWeeklyReport() {
+    const sessions = Storage.Sessions.getAll()
+      .filter(s => s.completed && s.focusScore !== null)
+      .sort((a, b) => a.startTime - b.startTime);
+    const since = Date.now() - 7 * 86400000;
+    const weekSessions = sessions.filter(s => s.startTime >= since);
+    const previousWeekSessions = sessions.filter(s => s.startTime >= since - 7 * 86400000 && s.startTime < since);
+
+    if (weekSessions.length === 0) {
+      return {
+        hasData: false,
+        title: 'Weekly Report Card',
+        summary: 'Complete a session this week to generate a report card.',
+        stats: {
+          sessions: 0,
+          minutes: 0,
+          avgScore: null,
+          avgRecovery: null,
+          scoreShift: null,
+        },
+        bestSession: null,
+        topDistraction: null,
+        recommendation: 'Start with one honest 15-25 minute session and log distractions as they happen.',
+      };
+    }
+
+    const avgScore = Math.round(_avg(weekSessions.map(s => s.focusScore || 0)));
+    const avgRecovery = Math.round(_avg(weekSessions.map(s => s.recoveryScore ?? Storage.calcSessionRecoveryScore(s, s.focusScore || 0))));
+    const minutes = Math.round(weekSessions.reduce((sum, s) => sum + Number(s.actualDuration || 0), 0));
+    const previousAvg = previousWeekSessions.length
+      ? Math.round(_avg(previousWeekSessions.map(s => s.focusScore || 0)))
+      : null;
+    const bestSession = weekSessions.slice().sort((a, b) => (b.focusScore || 0) - (a.focusScore || 0))[0];
+    const topDistraction = _distractionTypeBreakdown(weekSessions)[0] || null;
+
+    return {
+      hasData: true,
+      title: 'Weekly Report Card',
+      summary: _weeklySummary(avgScore, avgRecovery, weekSessions.length),
+      stats: {
+        sessions: weekSessions.length,
+        minutes,
+        avgScore,
+        avgRecovery,
+        scoreShift: previousAvg === null ? null : avgScore - previousAvg,
+      },
+      bestSession: bestSession ? {
+        score: bestSession.focusScore || 0,
+        duration: Number(bestSession.actualDuration || bestSession.plannedDuration || 0),
+        date: Storage.dateStr(bestSession.startTime),
+      } : null,
+      topDistraction: topDistraction ? {
+        label: DISTRACTION_LABELS[topDistraction.type] || topDistraction.type,
+        count: topDistraction.count,
+      } : null,
+      recommendation: _weeklyRecommendation({ avgScore, avgRecovery, weekSessions, topDistraction }),
+    };
+  }
+
+  function _avg(values) {
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+  }
+
+  function _weeklySummary(avgScore, avgRecovery, count) {
+    if (avgScore >= 80 && avgRecovery >= 70) return `Strong week: ${count} session${count !== 1 ? 's' : ''} with healthy recovery.`;
+    if (avgScore >= 65) return `Solid week: focus is building, with ${count} completed session${count !== 1 ? 's' : ''}.`;
+    if (avgRecovery < 50) return 'Recovery was the limiting factor this week.';
+    return 'This week has signal, but the next goal is cleaner and longer sessions.';
+  }
+
+  function _weeklyRecommendation({ avgScore, avgRecovery, weekSessions, topDistraction }) {
+    const totalDistractions = weekSessions.reduce((sum, s) => sum + s.distractions.length, 0);
+    if (weekSessions.length < 3) return 'Aim for 3 meaningful sessions next week before chasing a higher score.';
+    if (avgRecovery < 50) return 'Keep one lighter day between heavy focus days so recovery can rebound.';
+    if (topDistraction && topDistraction.count >= 3) {
+      return `Main experiment: reduce ${DISTRACTION_LABELS[topDistraction.type] || topDistraction.type.toLowerCase()} before starting each session.`;
+    }
+    if (totalDistractions === 0 && avgScore >= 75) return 'You are getting clean sessions. Try raising the weekly minutes goal slightly.';
+    if (avgScore < 55) return 'Use shorter 15-minute blocks and focus on finishing cleanly before increasing duration.';
+    return 'Repeat your best session setup next week and keep logging distractions honestly.';
+  }
+
+  return { generate, getDistractionBreakdown, getWeeklyReport, DISTRACTION_LABELS };
 })();
 
 window.Insights = Insights;
