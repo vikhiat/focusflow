@@ -1,11 +1,37 @@
 // ─── Storage Layer ───────────────────────────────────────────────────────────
 // All data lives in localStorage under namespaced keys.
+// Multi-user: each user's data is namespaced by user ID.
 
 const KEYS = {
+  // Legacy / single-user (kept for backwards compat)
   SESSIONS: 'ff_sessions',
   NOTES: 'ff_notes',
   SETTINGS: 'ff_settings',
+  // Multi-user
+  USERS: 'ff_users',
+  ACTIVE_USER: 'ff_active_user',
+  DAY_MARKER: 'ff_day_marker',
 };
+
+// ── Active User helpers ───────────────────────────────────────────────────────
+function _getActiveUserId() {
+  return localStorage.getItem(KEYS.ACTIVE_USER) || null;
+}
+
+function _nsKey(base) {
+  const uid = _getActiveUserId();
+  return uid ? `${base}__u_${uid}` : base; // fallback to legacy key
+}
+
+// Wrap the KEYS accessors to be user-namespaced
+function _dataKeys() {
+  return {
+    SESSIONS: _nsKey(KEYS.SESSIONS),
+    NOTES:    _nsKey(KEYS.NOTES),
+    SETTINGS: _nsKey(KEYS.SETTINGS),
+    DAY_MARKER: _nsKey(KEYS.DAY_MARKER),
+  };
+}
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -32,6 +58,15 @@ function save(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+function _userDataKeys(userId) {
+  return {
+    sessions: `ff_sessions__u_${userId}`,
+    notes: `ff_notes__u_${userId}`,
+    settings: `ff_settings__u_${userId}`,
+    dayMarker: `ff_day_marker__u_${userId}`,
+  };
+}
+
 // ── Sessions ─────────────────────────────────────────────────────────────────
 /*
   Session schema:
@@ -51,7 +86,7 @@ function save(key, value) {
 
 const Sessions = {
   getAll() {
-    return load(KEYS.SESSIONS);
+    return load(_dataKeys().SESSIONS);
   },
 
   getById(id) {
@@ -77,14 +112,19 @@ const Sessions = {
     };
     const all = this.getAll();
     all.push(session);
-    save(KEYS.SESSIONS, all);
+    save(_dataKeys().SESSIONS, all);
     return session;
   },
 
   update(id, patch) {
     const all = this.getAll().map(s => s.id === id ? { ...s, ...patch } : s);
-    save(KEYS.SESSIONS, all);
+    save(_dataKeys().SESSIONS, all);
     return all.find(s => s.id === id);
+  },
+
+  delete(id) {
+    const all = this.getAll().filter(s => s.id !== id);
+    save(_dataKeys().SESSIONS, all);
   },
 
   addDistraction(sessionId, type, note = '') {
@@ -120,6 +160,16 @@ const Sessions = {
     return this.getAll().filter(s => s.date === dateStr);
   },
 
+  deleteBefore(dateStr) {
+    const kept = this.getAll().filter(s => s.date >= dateStr);
+    save(_dataKeys().SESSIONS, kept);
+    return kept;
+  },
+
+  clearAll() {
+    save(_dataKeys().SESSIONS, []);
+  },
+
   getLast30Days() {
     const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
     return this.getAll().filter(s => s.startTime >= cutoff);
@@ -127,17 +177,18 @@ const Sessions = {
 
   recalculateScores() {
     const all = this.getAll().map(session => {
-      if (!session.completed) return session;
+      const normalized = { ...session, date: dateStr(session.startTime) };
+      if (!session.completed) return normalized;
       const actualDuration = getSessionMinutes(session);
       const focusScore = calcFocusScore(session.distractions || [], actualDuration, session.plannedDuration);
       return {
-        ...session,
+        ...normalized,
         focusScore,
         loadScore: calcSessionLoadScore(session.distractions || [], actualDuration, session.plannedDuration),
         recoveryScore: calcSessionRecoveryScore({ ...session, actualDuration }, focusScore),
       };
     });
-    save(KEYS.SESSIONS, all);
+    save(_dataKeys().SESSIONS, all);
   },
 };
 
@@ -158,7 +209,7 @@ const Sessions = {
 
 const NoteStore = {
   getAll() {
-    return load(KEYS.NOTES);
+    return load(_dataKeys().NOTES);
   },
 
   getById(id) {
@@ -178,7 +229,7 @@ const NoteStore = {
     };
     const all = this.getAll();
     all.unshift(note);
-    save(KEYS.NOTES, all);
+    save(_dataKeys().NOTES, all);
     return note;
   },
 
@@ -186,13 +237,13 @@ const NoteStore = {
     const all = this.getAll().map(n =>
       n.id === id ? { ...n, ...patch, updatedAt: Date.now() } : n
     );
-    save(KEYS.NOTES, all);
+    save(_dataKeys().NOTES, all);
     return all.find(n => n.id === id);
   },
 
   delete(id) {
     const all = this.getAll().filter(n => n.id !== id);
-    save(KEYS.NOTES, all);
+    save(_dataKeys().NOTES, all);
   },
 
   search(query) {
@@ -208,7 +259,7 @@ const NoteStore = {
 // ── Settings ──────────────────────────────────────────────────────────────────
 const Settings = {
   get() {
-    return loadObj(KEYS.SETTINGS, {
+    return loadObj(_dataKeys().SETTINGS, {
       name: '',
       workDuration: 25,
       breakDuration: 5,
@@ -217,20 +268,34 @@ const Settings = {
   },
   save(patch) {
     const current = this.get();
-    save(KEYS.SETTINGS, { ...current, ...patch });
+    save(_dataKeys().SETTINGS, { ...current, ...patch });
   },
 };
 
 // ── Utility ──────────────────────────────────────────────────────────────────
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return dateStr(Date.now());
 }
 
 function dateStr(ts) {
-  return new Date(ts).toISOString().slice(0, 10);
+  const date = new Date(ts);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseLocalDate(dateText) {
+  const [year, month, day] = String(dateText).split('-').map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
 }
 
 function calcFocusScore(distractions, actualDuration, plannedDuration) {
+  const breakdown = calcFocusScoreBreakdown(distractions, actualDuration, plannedDuration);
+  return breakdown.score;
+}
+
+function calcFocusScoreBreakdown(distractions = [], actualDuration, plannedDuration) {
   const duration = Math.max(Number(actualDuration) || 0, 0);
   const planned = Math.max(Number(plannedDuration) || 25, 1);
   const completionRatio = clamp(duration / planned, 0, 1);
@@ -251,7 +316,41 @@ function calcFocusScore(distractions, actualDuration, plannedDuration) {
   const shortSessionPenalty = duration < 2 ? 28 : duration < 5 ? 18 : duration < 10 ? 8 : 0;
 
   const score = completionPoints + durationPoints + cleanWorkPoints + finishBonus - shortSessionPenalty;
-  return clamp(Math.round(score), 0, 100);
+  return {
+    score: clamp(Math.round(score), 0, 100),
+    parts: [
+      {
+        label: 'Completion',
+        value: Math.round(completionPoints),
+        max: 46,
+        note: `${Math.round(completionRatio * 100)}% of planned time`,
+      },
+      {
+        label: 'Duration',
+        value: Math.round(durationPoints),
+        max: 24,
+        note: `${roundToOne(duration)} minutes`,
+      },
+      {
+        label: 'Clean work',
+        value: Math.round(cleanWorkPoints),
+        max: 24,
+        note: `${distractions.length} distraction${distractions.length !== 1 ? 's' : ''}`,
+      },
+      {
+        label: 'Finish bonus',
+        value: Math.round(finishBonus),
+        max: 6,
+        note: completionRatio >= 0.98 ? 'Completed the planned block' : 'Finish full block to unlock',
+      },
+      {
+        label: 'Short penalty',
+        value: -Math.round(shortSessionPenalty),
+        max: 0,
+        note: shortSessionPenalty ? 'Very short sessions score lower' : 'No short-session penalty',
+      },
+    ],
+  };
 }
 
 function calcSessionLoadScore(distractions, actualDuration, plannedDuration) {
@@ -307,7 +406,7 @@ function getStreakData() {
   // Current streak from today backwards
   let checkDate = new Date();
   while (true) {
-    const ds = checkDate.toISOString().slice(0, 10);
+    const ds = dateStr(checkDate.getTime());
     if (dailyScores[ds] > 50) {
       currentStreak++;
       checkDate.setDate(checkDate.getDate() - 1);
@@ -318,6 +417,46 @@ function getStreakData() {
   }
 
   return { dailyScores, currentStreak, bestStreak, totalSessions: sessions.length };
+}
+
+function getJourneySummary() {
+  const sessions = Sessions.getAll().filter(s => s.completed);
+  const notes = NoteStore.getAll();
+  const today = todayStr();
+  const todaySessions = sessions.filter(s => s.date === today);
+  const previousSessions = sessions.filter(s => s.date < today);
+  const totalMinutes = sessions.reduce((sum, s) => sum + getSessionMinutes(s), 0);
+  const avgScore = sessions.length
+    ? Math.round(avg(sessions.map(s => s.focusScore || 0)))
+    : null;
+  const firstSession = sessions.slice().sort((a, b) => a.startTime - b.startTime)[0] || null;
+
+  return {
+    today,
+    totalSessions: sessions.length,
+    todaySessions: todaySessions.length,
+    previousSessions: previousSessions.length,
+    totalMinutes: roundToOne(totalMinutes),
+    avgScore,
+    notes: notes.length,
+    startedOn: firstSession ? firstSession.date : null,
+    lastRollover: localStorage.getItem(_dataKeys().DAY_MARKER) || today,
+  };
+}
+
+function checkDailyRollover() {
+  const key = _dataKeys().DAY_MARKER;
+  const today = todayStr();
+  const previous = localStorage.getItem(key);
+  if (!previous) {
+    localStorage.setItem(key, today);
+    return { changed: false, previous: today, today };
+  }
+  if (previous !== today) {
+    localStorage.setItem(key, today);
+    return { changed: true, previous, today };
+  }
+  return { changed: false, previous, today };
 }
 
 function getDailyState(date = todayStr()) {
@@ -460,8 +599,151 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+// ── Users ─────────────────────────────────────────────────────────────────────
+/*
+  User schema: { id, name, createdAt, avatar? }
+*/
+const Users = {
+  getAll() {
+    try {
+      return JSON.parse(localStorage.getItem(KEYS.USERS)) || [];
+    } catch { return []; }
+  },
+
+  getActive() {
+    const id = _getActiveUserId();
+    return id ? (this.getAll().find(u => u.id === id) || null) : null;
+  },
+
+  setActive(id) {
+    localStorage.setItem(KEYS.ACTIVE_USER, id);
+  },
+
+  create(name) {
+    const id = uid();
+    const user = { id, name: name.trim() || 'New User', createdAt: Date.now() };
+    const all = this.getAll();
+    all.push(user);
+    localStorage.setItem(KEYS.USERS, JSON.stringify(all));
+    return user;
+  },
+
+  rename(id, name) {
+    const all = this.getAll().map(u => u.id === id ? { ...u, name: name.trim() || u.name } : u);
+    localStorage.setItem(KEYS.USERS, JSON.stringify(all));
+    return all.find(u => u.id === id);
+  },
+
+  delete(id) {
+    // Remove all user data
+    const base = [`ff_sessions__u_${id}`, `ff_notes__u_${id}`, `ff_settings__u_${id}`, `ff_day_marker__u_${id}`];
+    base.forEach(k => localStorage.removeItem(k));
+    const all = this.getAll().filter(u => u.id !== id);
+    localStorage.setItem(KEYS.USERS, JSON.stringify(all));
+    // If the deleted user was active, clear active
+    if (_getActiveUserId() === id) {
+      const next = all[0];
+      if (next) localStorage.setItem(KEYS.ACTIVE_USER, next.id);
+      else localStorage.removeItem(KEYS.ACTIVE_USER);
+    }
+    return all;
+  },
+
+  deletePreviousRecords() {
+    return Sessions.deleteBefore(todayStr());
+  },
+
+  resetActiveJourney({ clearNotes = false } = {}) {
+    Sessions.clearAll();
+    if (clearNotes) save(_dataKeys().NOTES, []);
+    const settings = Settings.get();
+    Settings.save({ ...settings });
+    localStorage.setItem(_dataKeys().DAY_MARKER, todayStr());
+  },
+
+  exportJson() {
+    const users = this.getAll();
+    const activeUserId = _getActiveUserId();
+    const data = {
+      app: 'FocusFlow',
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      activeUserId,
+      users: users.map(user => {
+        const keys = _userDataKeys(user.id);
+        return {
+          ...user,
+          sessions: load(keys.sessions),
+          notes: load(keys.notes),
+          settings: loadObj(keys.settings, {}),
+          dayMarker: localStorage.getItem(keys.dayMarker) || todayStr(),
+        };
+      }),
+    };
+    return JSON.stringify(data, null, 2);
+  },
+
+  importJson(jsonText) {
+    let data;
+    try {
+      data = JSON.parse(jsonText);
+    } catch {
+      throw new Error('This file is not valid JSON.');
+    }
+
+    if (data.app !== 'FocusFlow' || !Array.isArray(data.users)) {
+      throw new Error('This does not look like a FocusFlow backup file.');
+    }
+
+    const currentUsers = this.getAll();
+    currentUsers.forEach(user => this.delete(user.id));
+
+    const cleanedUsers = data.users.map(user => ({
+      id: String(user.id || uid()),
+      name: String(user.name || 'Imported User'),
+      createdAt: Number(user.createdAt || Date.now()),
+    }));
+
+    localStorage.setItem(KEYS.USERS, JSON.stringify(cleanedUsers));
+
+    data.users.forEach((user, index) => {
+      const id = cleanedUsers[index].id;
+      const keys = _userDataKeys(id);
+      save(keys.sessions, Array.isArray(user.sessions) ? user.sessions : []);
+      save(keys.notes, Array.isArray(user.notes) ? user.notes : []);
+      save(keys.settings, user.settings && typeof user.settings === 'object' ? user.settings : {});
+      localStorage.setItem(keys.dayMarker, user.dayMarker || todayStr());
+    });
+
+    const activeExists = cleanedUsers.some(user => user.id === data.activeUserId);
+    if (activeExists) localStorage.setItem(KEYS.ACTIVE_USER, data.activeUserId);
+    else if (cleanedUsers[0]) localStorage.setItem(KEYS.ACTIVE_USER, cleanedUsers[0].id);
+    else localStorage.removeItem(KEYS.ACTIVE_USER);
+
+    Sessions.recalculateScores();
+    return { users: cleanedUsers.length };
+  },
+
+  // Migrate legacy (non-namespaced) data into user slot
+  migrateToUser(userId) {
+    const targets = [
+      [KEYS.SESSIONS, `ff_sessions__u_${userId}`],
+      [KEYS.NOTES,    `ff_notes__u_${userId}`],
+      [KEYS.SETTINGS, `ff_settings__u_${userId}`],
+    ];
+    targets.forEach(([from, to]) => {
+      if (!localStorage.getItem(to)) {
+        const val = localStorage.getItem(from);
+        if (val) localStorage.setItem(to, val);
+      }
+    });
+  },
+};
+
 // Export to global scope for module-free use
 window.Storage = {
-  Sessions, Notes: NoteStore, Settings, uid, todayStr, dateStr,
-  getStreakData, getDailyState, calcFocusScore, calcSessionLoadScore, calcSessionRecoveryScore,
+  Sessions, Notes: NoteStore, Settings, Users,
+  uid, todayStr, dateStr, parseLocalDate,
+  getStreakData, getDailyState, getJourneySummary, checkDailyRollover,
+  calcFocusScore, calcFocusScoreBreakdown, calcSessionLoadScore, calcSessionRecoveryScore,
 };
