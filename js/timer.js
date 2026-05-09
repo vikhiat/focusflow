@@ -1,22 +1,35 @@
 // ─── Timer Module ─────────────────────────────────────────────────────────────
+// Uses wall-clock anchoring (Date.now) instead of pure setInterval counting
+// to avoid drift caused by browser throttling or heavy CPU.
 
 const Timer = (() => {
   const STATES = { IDLE: 'idle', RUNNING: 'running', PAUSED: 'paused', BREAK: 'break', DONE: 'done' };
 
   let state = STATES.IDLE;
   let activeSessionId = null;
-  let intervalId = null;
-  let secondsLeft = 0;
-  let totalSeconds = 0;
-  let breakSecondsLeft = 0;
+  let rafId = null;          // requestAnimationFrame handle for smooth ticks
+  let intervalId = null;     // fallback setInterval (used only for break)
+
+  // Wall-clock anchors
+  let _startEpoch = 0;       // Date.now() when the current run began
+  let _elapsed = 0;          // seconds already elapsed before the current run (pausing)
+  let _totalSeconds = 0;     // total seconds for the current phase
+  let _secondsLeft = 0;      // cached value for display
+  let _breakStartEpoch = 0;
+  let _breakTotal = 0;
+  let _breakLeft = 0;
+
   let onTickCb = null;
   let onCompleteCb = null;
   let onBreakEndCb = null;
+
+  let _lastDisplaySecond = -1; // avoid redundant renders
 
   function getState() { return state; }
   function getActiveSessionId() { return activeSessionId; }
   function isActive() { return state === STATES.RUNNING || state === STATES.PAUSED || state === STATES.BREAK; }
 
+  // ── Start ─────────────────────────────────────────────────────────────────
   function start(plannedDuration, meta = {}) {
     if (state !== STATES.IDLE && state !== STATES.DONE) return;
     const settings = Storage.Settings.get();
@@ -24,36 +37,47 @@ const Timer = (() => {
     const session = Storage.Sessions.create(duration, meta);
     activeSessionId = session.id;
 
-    secondsLeft = duration * 60;
-    totalSeconds = secondsLeft;
+    _totalSeconds = duration * 60;
+    _elapsed = 0;
+    _startEpoch = Date.now();
+    _secondsLeft = _totalSeconds;
+    _lastDisplaySecond = -1;
     state = STATES.RUNNING;
 
     _emitTick();
-    intervalId = setInterval(_tick, 1000);
+    _scheduleRaf();
     return session;
   }
 
+  // ── Pause / Resume ────────────────────────────────────────────────────────
   function pause() {
     if (state !== STATES.RUNNING) return;
+    _cancelRaf();
+    // Snapshot elapsed so we can resume correctly
+    _elapsed = Math.min(_totalSeconds, _elapsed + _secondsElapsed());
     state = STATES.PAUSED;
-    clearInterval(intervalId);
-    intervalId = null;
+    _secondsLeft = Math.max(0, _totalSeconds - _elapsed);
     _emitTick();
   }
 
   function resume() {
     if (state !== STATES.PAUSED) return;
+    _startEpoch = Date.now(); // reset anchor; _elapsed already has the prior elapsed
     state = STATES.RUNNING;
-    intervalId = setInterval(_tick, 1000);
+    _lastDisplaySecond = -1;
+    _emitTick();
+    _scheduleRaf();
   }
 
+  // ── Distraction logging ───────────────────────────────────────────────────
   function logDistraction(type, note = '') {
     if (!activeSessionId) return;
     Storage.Sessions.addDistraction(activeSessionId, type, note);
-    // Flash visual feedback handled in app.js
   }
 
+  // ── Complete (natural or forced) ──────────────────────────────────────────
   function complete(mood = null) {
+    _cancelRaf();
     clearInterval(intervalId);
     intervalId = null;
 
@@ -62,28 +86,33 @@ const Timer = (() => {
       activeSessionId = null;
 
       const settings = Storage.Settings.get();
-      // Start break
-      breakSecondsLeft = settings.breakDuration * 60;
+      _breakTotal = settings.breakDuration * 60;
+      _breakLeft = _breakTotal;
+      _breakStartEpoch = Date.now();
       state = STATES.BREAK;
       _emitTick();
 
+      // Break uses a simple setInterval (no need for frame-perfect accuracy here)
       intervalId = setInterval(() => {
-        breakSecondsLeft--;
-        if (breakSecondsLeft <= 0) {
+        const elapsed = Math.floor((Date.now() - _breakStartEpoch) / 1000);
+        _breakLeft = Math.max(0, _breakTotal - elapsed);
+        _emitTick();
+        if (_breakLeft <= 0) {
           clearInterval(intervalId);
           intervalId = null;
           state = STATES.DONE;
           if (onBreakEndCb) onBreakEndCb();
         }
-        _emitTick();
-      }, 1000);
+      }, 500); // poll at 500 ms for precision
 
       if (onCompleteCb) onCompleteCb(completed);
       return completed;
     }
   }
 
+  // ── Abandon ───────────────────────────────────────────────────────────────
   function abandon() {
+    _cancelRaf();
     clearInterval(intervalId);
     intervalId = null;
     if (activeSessionId) {
@@ -94,10 +123,12 @@ const Timer = (() => {
       activeSessionId = null;
     }
     state = STATES.IDLE;
-    secondsLeft = 0;
+    _secondsLeft = 0;
+    _elapsed = 0;
     _emitTick();
   }
 
+  // ── Skip Break ────────────────────────────────────────────────────────────
   function skipBreak() {
     if (state !== STATES.BREAK) return;
     clearInterval(intervalId);
@@ -107,51 +138,79 @@ const Timer = (() => {
     if (onBreakEndCb) onBreakEndCb();
   }
 
+  // ── Reset ─────────────────────────────────────────────────────────────────
   function reset() {
+    _cancelRaf();
     clearInterval(intervalId);
     intervalId = null;
     state = STATES.IDLE;
     activeSessionId = null;
-    secondsLeft = 0;
-    totalSeconds = 0;
+    _secondsLeft = 0;
+    _totalSeconds = 0;
+    _elapsed = 0;
     _emitTick();
   }
 
+  // ── Callbacks ─────────────────────────────────────────────────────────────
   function onTick(cb) { onTickCb = cb; }
   function onComplete(cb) { onCompleteCb = cb; }
   function onBreakEnd(cb) { onBreakEndCb = cb; }
 
+  // ── Display ───────────────────────────────────────────────────────────────
   function getDisplay() {
     if (state === STATES.BREAK) {
       return {
         state,
-        timeStr: formatSeconds(breakSecondsLeft),
-        seconds: breakSecondsLeft,
-        totalSeconds: Storage.Settings.get().breakDuration * 60,
-        progress: 1 - breakSecondsLeft / (Storage.Settings.get().breakDuration * 60),
+        timeStr: formatSeconds(_breakLeft),
+        seconds: _breakLeft,
+        totalSeconds: _breakTotal,
+        progress: _breakTotal > 0 ? 1 - _breakLeft / _breakTotal : 1,
       };
     }
     return {
       state,
-      timeStr: formatSeconds(secondsLeft),
-      seconds: secondsLeft,
-      totalSeconds,
-      progress: totalSeconds > 0 ? 1 - secondsLeft / totalSeconds : 0,
+      timeStr: formatSeconds(_secondsLeft),
+      seconds: _secondsLeft,
+      totalSeconds: _totalSeconds,
+      progress: _totalSeconds > 0 ? 1 - _secondsLeft / _totalSeconds : 0,
       sessionId: activeSessionId,
     };
   }
 
+  // ── Internal ──────────────────────────────────────────────────────────────
+  function _secondsElapsed() {
+    return Math.floor((Date.now() - _startEpoch) / 1000);
+  }
+
   function _tick() {
-    if (state === STATES.RUNNING) {
-      secondsLeft--;
-      if (secondsLeft <= 0) {
-        secondsLeft = 0;
-        _emitTick();
-        complete();
-        return;
-      }
+    if (state !== STATES.RUNNING) return;
+
+    const totalElapsed = _elapsed + _secondsElapsed();
+    _secondsLeft = Math.max(0, _totalSeconds - totalElapsed);
+
+    // Only emit when the displayed second changes (avoids unnecessary renders)
+    if (_secondsLeft !== _lastDisplaySecond) {
+      _lastDisplaySecond = _secondsLeft;
+      _emitTick();
     }
-    _emitTick();
+
+    if (_secondsLeft <= 0) {
+      complete();
+      return;
+    }
+
+    _scheduleRaf();
+  }
+
+  function _scheduleRaf() {
+    rafId = requestAnimationFrame(_tick);
+  }
+
+  function _cancelRaf() {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
   }
 
   function _emitTick() {
@@ -159,8 +218,9 @@ const Timer = (() => {
   }
 
   function formatSeconds(s) {
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
+    const total = Math.max(0, Math.round(s));
+    const m = Math.floor(total / 60);
+    const sec = total % 60;
     return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
   }
 
