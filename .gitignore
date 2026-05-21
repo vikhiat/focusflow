@@ -1,0 +1,11 @@
+.env
+.env.*
+focusflow-backup-*.json
+*.backup.json
+*.log
+*.db
+*.sqlite
+.DS_Store
+node_modules/
+.vscode/
+im];./
