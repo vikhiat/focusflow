@@ -747,3 +747,4 @@ window.Storage = {
   getStreakData, getDailyState, getJourneySummary, checkDailyRollover,
   calcFocusScore, calcFocusScoreBreakdown, calcSessionLoadScore, calcSessionRecoveryScore,
 };
+
